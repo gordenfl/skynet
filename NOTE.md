@@ -13,8 +13,7 @@ jemalloc 主要用了内存池来管理内存而不是原有的 malloc管理内�
 在 makefile 中，的 include platform.mk 主要处理平台相关的宏定义和 gcc 的基础命令行
 其中优先编译 3rd，
 
-
-## .PHONY
+#### .PHONY
 是为了防止文件名与 target 冲突的，如果有一个文件叫做 clean.cpp
 ```makefile
     all: clean build
@@ -45,7 +44,7 @@ jemalloc 主要用了内存池来管理内存而不是原有的 malloc管理内�
 - 初始化 profile skynet_profile_enable(config->profile); #TODO
 - 初始化 Log 对象和 bootstrap相关信息 
 - 开始运行
-	- 创建 Monitor 对象，用来给外部对整个系统的对 线程描述信息数组，锁， sleep， quit 等信息的跟踪
+	- 创建 Monitor 对象，用来给外部对整个系统的对 线程描述信息数组，锁， sleep， quit 等信息的跟踪。（这里是主线程）
 	- 创建3个线程 和 pthread_mutex pthread_cond 每个线程包含的信息：版本 Mornitor ，check_version, source, destination，每个线程的这些信息放在 Mornitor 里面的线程描述信息组里。这三个线程分别是 Mornitor， Timer， socket 线程
 	- 创建 12个线程，都是 thread_worker, 每个线程开始自己的工作
 	- 每个 worker 线程开始自己的无限循环，从 MQ 中拿数据来做事情。这个动作都是用 mutex 锁定的保证线程安全。
@@ -74,9 +73,6 @@ print(identifier:match("var123")) -- 输出 7
 print(identifier:match("123var")) -- 输出 nil
 
 ```
-
-## config 部分
-这个系统采用 Lua 文件作为整个系统的配置
 
 ## 环境变量部分
 
@@ -107,6 +103,44 @@ atomic_test_and_set_(&lock->lock);
 atomic_exchange_explicit(&lock->lock);
 atomic_compare_exchange_weak(&lock->lock);
 ```
+
+## Config 部分
+这个系统采用 Lua 文件作为整个系统的配置。首先加载的过程中，启动代码中有一个字符串变量，包含的是初始化必备的 config 信息。
+```C
+static const char * load_config = "\
+	local result = {}\n\
+	local function getenv(name) return assert(os.getenv(name), [[os.getenv() failed: ]] .. name) end\n\
+	local sep = package.config:sub(1,1)\n\
+	local current_path = [[.]]..sep\n\
+	local function include(filename)\n\
+		local last_path = current_path\n\
+		local path, name = filename:match([[(.*]]..sep..[[)(.*)$]])\n\
+		if path then\n\
+			if path:sub(1,1) == sep then	-- root\n\
+				current_path = path\n\
+			else\n\
+				current_path = current_path .. path\n\
+			end\n\
+		else\n\
+			name = filename\n\
+		end\n\
+		local f = assert(io.open(current_path .. name))\n\
+		local code = assert(f:read [[*a]])\n\
+		code = string.gsub(code, [[%$([%w_%d]+)]], getenv)\n\
+		f:close()\n\
+		assert(load(code,[[@]]..filename,[[t]],result))()\n\
+		current_path = last_path\n\
+	end\n\
+	setmetatable(result, { __index = { include = include } })\n\
+	local config_name = ...\n\
+	include(config_name)\n\
+	setmetatable(result, nil)\n\
+	return result\n\
+";
+```
+
+这段代码主要的内容是提供基本函数 getenv setenv include setmetatable 等基本的操作，为了在配置文件的设置和读取中有一定的帮助。
+系统先创建一个 lua_State 加载这段字符串变成代码段，然后在这个 包含了上述功能的 lua_State 里再去将对应定义的内容一步一步的 set 到 skynet_env.h/c 模块的lua_State 中，这样让 skynet_env 这个模块就有上面字符串里包含的最基本的 get set include setmetatable 等功能了。这就是整个 config 模块的功能。简单说就是创建一个 setnet_env 的模块
 
 
 ## lualib-src/sproto 协议封装
@@ -172,7 +206,7 @@ static int encode_uint64(uint64_t v, uint8_t * data, int size) {
 ## Network 线程
  基础的TCP/IP 接口的实现，支持 TCP UDP 的协议。对于 MacosX 和 FreeBSD 系统在编译的时候通过宏定义导向逻辑 KEvent 来实现(socket_server.c, socket_pool.h, socket_kqueue.h)，Linux 下面导向 epoll (socket_epoll.h)实现. 核心函数 send_request
 
- ```
+ ```C
  send_request(ss, &request, 'O', sizeof(request.u.open) + len); 
  ```
  类似这种调用，其中第三个参数一个字符，代表不同含义：
@@ -309,14 +343,106 @@ static struct global_queue *Q = NULL;
 这里定义了专门的 Queue 和 message 对象。以 Q 为核心操作对象，包括有 push，pop，除了 Global Queue 之外还允许独立创建 Queue，但是需要创建者自己来管理，只是这个模块提供了 push pop 的操作而已。
 整个 Queue 的内部采用循环队列来管理 all messages，当一个 queue 的循环队列满了，会自动expand_queue 这个队列，他的逻辑是 expand 当时队列的长度，就是将队列变成 2 倍那么长。
 MQ 被使用的地方：
+
 ```
 1. 多个线程之间数据交换的基本通道，为了保证线程安全，多个线程之间的MQ
-2.
-3.
+2. 可以是多进程之间的信息传递，如果你配置了多进程的运行模式的话
+3. 传递的数据就是Context， 中间包含一般的数据，也包含 Lua 的 Module instance， 这样可以做到不同 Lua 解释器之间的数据共享
 ```
 
 ## Module 
-TODO:
+Module 管理层的逻辑可以帮助建立 Module Instance，所有建立的 Module Instance 都会在一个 
+```C
+static struct modules * M = NULL;
+struct modules {
+	int count;
+	struct spinlock lock;
+	const char * path;
+	struct skynet_module m[MAX_MODULE_TYPE];
+};//也就是说这个 Modules 最多管理MAX_MODULE_TYPE 个 m，MAX_MODULE_TYPE = 32 的，对过管理 32 个 Module
+```
+的指针中保存下来。这是 若干个 Module 的管理系统。
+
+Module instance 创建过程：
+skynet_module.c 中有这么个函数 
+
+```C
+static void * _try_open(struct modules *m, const char * name);
+```
+
+这个函数的意思就是打开一个名字叫做 name 的Module，他会去很多路径查询并且试图去加载，直到加载成功后返回 module 的指针（void *）
+然后将 返回的 module instance 的指针放入前面说的struct skynet_module m[MAX_MODULE_TYPE];数组中。然后正式 open 这个 module instance，去找这个 module instance 的 api 是否存在_create, _init _release _signal, 分别赋值给 modules 结构提里面的函数指针。
+下面是每个 Module instance的含义：
+然后，每一个 Module Instance 都有这么几个函数： (前面是函数类型，后面是函数名)
+
+```
+	skynet_dl_create : create
+	skynet_dl_init  : init
+	skynet_dl_release : release
+	skynet_dl_signal : signal
+```
+
+一个 Module 在创建的时候一定会调用 create，但是不会掉用 init，如果没有实现 create 函数，那么就会返回一个错误指针：0xFFFFFFFF，否则会返回 create 函数的返回值，
+Module instance 是可以用他的name 来检索是否包含在 Modules 里面的
+Module instance 创建完以后一般会包装成为一个 context， 然后通过handle_resister 注册到 handle 里面，这部分就涉及到 Handler 的讲解了
+
+## Handler
+本身 Handler 管理很多 Module 和其他相关对象的 Context。他也有自己的管理对象：
+```C
+struct handle_storage {
+	struct rwlock lock;
+
+	uint32_t harbor;
+	uint32_t handle_index;
+	int slot_size;
+	struct skynet_context ** slot;
+	
+	int name_cap;
+	int name_count;
+	struct handle_name *name;
+};
+
+static struct handle_storage *H = NULL;
+```
+Handler 模块初始化的逻辑大概是给他的 H 创建内存，并且 H 中的 slot 也创建内存，
+
+在这个模块里面他提供了 register, retire, retire_all, grab, find_name 等函数让别人去操作 handle 对象
+具体 Handler 和 Module 之间的区别后面看懂了再在这里写，从现在读到的深度似乎发现了 Handler 比 Module更加 common 对的类。这可能是除了 Module 之外还有其他的东西需要通过 Handler 来操作，用  将 Context 包装一层 Module 放入 Hnadler 里面。（总之要确认才知道） TODO：
+
+另外 handler 是也可以用名字检索
+
+## Context 对象
+上面说了 Module 会被包装成一个Context 放入 Handler，这个 Context 是个什么？来看 skynet_server.c 是怎么定义 context 的
+```C
+struct skynet_context {
+	void * instance;
+	struct skynet_module * mod;
+	void * cb_ud;
+	skynet_cb cb;
+	struct message_queue *queue;
+	ATOM_POINTER logfile;
+	uint64_t cpu_cost;	// in microsec
+	uint64_t cpu_start;	// in microsec
+	char result[32];
+	uint32_t handle;
+	int session_id;
+	ATOM_INT ref;
+	size_t message_count;
+	bool init;
+	bool endless;
+	bool profile;
+
+	CHECKCALLING_DECL
+};
+```
+里面包含 module， queue，的信息我所理解的为什么会包含 queue 是因为context 会放入一些queue， 这样的反向引用提高效率，否则要查询会非常麻烦。
+中了我的猜想，原来 context 就是为了通过做MQ 进行传输数据时候使用的，也就是说多个线程或者进程之间的通信，数据都需要通过 context 来包装以后才能够传递，handler 要传递或者接收消息如果别人穿过来的是一个 module,这样也是可以的。这就是为什么 context 对象里面会包含
+```C
+struct skynet_module * mod;
+```
+字段。我所能想象到的就是当一个 Lua 对象在虚拟机里面，可以是一个 Module，然后通过这个Context 的封装，可以传递出去给另外的线程去处理，这样变相的实现了在 Lua不支持多线程的情况下用线程之间传递 Module 的方式来传递数据，也就可以让一个 Module 就保存好一个玩家专属的信息就好。这样就不会出现多线程访问 Lua 虚拟机导致crash 的问题。也就是这个 Skynet 的核心部分。将 Lua 的一部分，打包传递到其他线程去工作。然后可以传回来。
+
+Context 除了支持传递 Module 之外还可以支持传递 common 的数据，
 
 ## Timer
 TODO:
@@ -328,19 +454,26 @@ TODO:
 TODO:
 
 ## Harbor
+TODO:
+
+## Service 模块
+TODO:
+
+## Mornitor 线程
+TODO:
+
 
 ```C 参考
 static unsigned int HARBOR = ~0; //按位取反 结果是 0xFFFFFFFF 这是获取最大 unsigned int 的最好办法
-
 ```
 
-## Handler
-TODO:
 
 ## Daemon && Single
 TODO:
 
 
+## Lua 代码部分 (./lualib )
+TODO:
 
 ## 读代码的总结
 
