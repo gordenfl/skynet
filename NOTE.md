@@ -235,6 +235,7 @@ socket_server.c : static int ctrl_cmd(struct socket_server *ss, struct socket_me
 
 ## SpinLock 自旋锁
 这个项目中多线程对一个资源的加锁通常都使用的是 spinLock，我好像没有读到过有其他加锁的逻辑。
+所有自旋锁的逻辑都放在 spinlock.h/c 中
 
 这里 spinLock, mutex 和 Semaphore 有很大的区别，列一下：
 - 工作方法：
@@ -247,10 +248,40 @@ socket_server.c : static int ctrl_cmd(struct socket_server *ss, struct socket_me
 	* Semaphore 灵活性很高，可以针对多个线程访问资源的限制，不仅仅是 0 和 1 的关系。但是复杂性较高，可能出现死锁，在访问连接池，线程池，这类操作的时候比较适用
 
 ## MQ 线程
-TODO:
+这里面自己实现了一套 MessageQueue 的逻辑，主要放在 skynet_mq.c/h 中，主要还是采用上面说的 SpinLock 保证线程安全。
+```C
+struct message_queue {
+	struct spinlock lock;
+	uint32_t handle;
+	int cap;
+	int head;
+	int tail;
+	int release;
+	int in_global;
+	int overload;
+	int overload_threshold;
+	struct skynet_message *queue;
+	struct message_queue *next;
+};
+
+struct global_queue {
+	struct message_queue *head;
+	struct message_queue *tail;
+	struct spinlock lock;
+};
+static struct global_queue *Q = NULL;
+```
+这里定义了专门的 Queue 和 message 对象。以 Q 为核心操作对象，包括有 push，pop，除了 Global Queue 之外还允许独立创建 Queue，但是需要创建者自己来管理，只是这个模块提供了 push pop 的操作而已。
+整个 Queue 的内部采用循环队列来管理 all messages，当一个 queue 的循环队列满了，会自动expand_queue 这个队列，他的逻辑是 expand 当时队列的长度，就是将队列变成 2 倍那么长。
+MQ 被使用的地方：
+```
+1. 
+2.
+3.
+```
 
 ## Module 
-TODO:
+
 
 ## Timer
 TODO:
