@@ -24,29 +24,6 @@
 
 这就是整个启动逻辑的全部过程，后期每个 worker 如何工作都是通过 MQ 的指令来做的。基本框架就出来了
 
-
-## LPeg
-这是一个用于做正则表达示实现模式匹配和解析器，比 Lua 中的正则表达式处理，提供更灵活的能力
-```lua
-local lpeg = require "lpeg"
-
--- 匹配一个或多个数字
-local digit = lpeg.R("09") -- 表示0-9范围内的数字
-local number = digit^1      -- ^1 表示至少出现1次
-
-print(number:match("1234")) -- 输出 5 (表示匹配到的位置+1)
-print(number:match("abc"))  -- 输出 nil (没有匹配到)
-```
-
-```lua
-local letter = lpeg.R("az", "AZ")
-local identifier = letter * (letter + digit)^0
-
-print(identifier:match("var123")) -- 输出 7
-print(identifier:match("123var")) -- 输出 nil
-
-```
-
 ## 环境变量部分
 
 在 skynet 中环境变量定义的是在 skynet_env.c/h 中定义的，这部分简单就是利用一个 lua_State 放入一些 global 的变量，这些变量可以通过spinlock来限制线程同步获取和设置。本身才去了线程安全。
@@ -448,6 +425,27 @@ TODO:
 ## Lua 代码部分 (./lualib )
 TODO:
 
+## LPeg
+这是一个用于做正则表达示实现模式匹配和解析器，比 Lua 中的正则表达式处理，提供更灵活的能力
+```lua
+local lpeg = require "lpeg"
+
+-- 匹配一个或多个数字
+local digit = lpeg.R("09") -- 表示0-9范围内的数字
+local number = digit^1      -- ^1 表示至少出现1次
+
+print(number:match("1234")) -- 输出 5 (表示匹配到的位置+1)
+print(number:match("abc"))  -- 输出 nil (没有匹配到)
+```
+
+```lua
+local letter = lpeg.R("az", "AZ")
+local identifier = letter * (letter + digit)^0
+
+print(identifier:match("var123")) -- 输出 7
+print(identifier:match("123var")) -- 输出 nil
+
+```
 
 ##  jemalloc
 checkout 的时候，他用到了 jemalloc 项目，需要git来同步外部引用的库
