@@ -72,7 +72,6 @@ SPIN_UNLOCK(E)
 atomic_test_and_set_(&lock->lock);
 atomic_exchange_explicit(&lock->lock);
 atomic_compare_exchange_weak(&lock->lock);
-
 ```
 
 ---
@@ -181,4 +180,18 @@ switch (type) {
 		return -1;
 	};
 ```
-现在清楚了具体做事情为什么不亲自调用函数来做了，因为脚本的进程和处理逻辑的进程是分开的，需要用 send_request 来传递事件。
+现在清楚了具体做事情为什么不亲自调用函数来做了，因为脚本的进程和处理逻辑的进程是分开的，需要用 send_request 来传递事件。总结一下逻辑：
+
+    脚本->skynet_socket.c->socket_server.c(function) -> pipline -> ctrl_cmd() -> deal detail logic
+
+网络模块的基本逻辑是这样的：
+```C
+skynet_start.c : static void start(int thread); -> 
+skynet_start.c : create_thread(&pid[2], thread_socket, m); ->
+skynet_start.c : static void * thread_socket(void *p); ->
+skynet_socket.c : int skynet_socket_poll(); ->
+socket_server.c : int socket_server_poll(struct socket_server *ss, struct socket_message * result, int * more); ->
+socket_server.c : static int ctrl_cmd(struct socket_server *ss, struct socket_message *result); ->
+//然后根据收到的不同类型的指令去做不同的事情，指令列表在上面
+```
+网络模块的基本逻辑，这条线中有很多其他的逻辑，都基本上是附加的，有什么相关的逻辑就可以按照这条线去发展。
