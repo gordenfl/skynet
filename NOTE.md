@@ -28,6 +28,30 @@ jemalloc 主要用了内存池来管理内存而不是原有的 malloc管理内�
 ```
 这样gcc 会认为只去编译 clean.cpp 而不会去找 clean 的 target 执行.
 
+## 启动逻辑
+- skynet_global_initial pthread 创建线程，设置主线程相关变量
+- skynet_env_initial 在主线程创建 LuaState 然后创建一个 Lua 虚拟机对象（并没有 load 任何人 config 数据）
+- sigign 创建 signal 的反馈函数，主要包含的信号量包括：SIG_IGN， SIGPIPE
+- 如果LUA_CACHELIB 宏定义了启用 Lua 代码缓存功能（目的是：提高 lua 代码的加载效率）
+- 以代码中的字符串初始化配置文件Lua 虚拟机中，关闭这个 Lua 虚拟机（有点绕是吧，但是有点想法，是为了不被干扰，保持配置文件模块中的虚拟机干净整齐）
+- 调用skynet_star(struct skynet_config * config) 开始启动
+- 先绑定 SIGNEL 的处理函数， 然后初始化，如果 config 有定义 daemon，就将进程设置为 daemon，这里判断如果是 MacOSX 就不做这个事情，因为 MacOSX 10.5 已经弃用了 Daemon，就直接写 pid 文件，关闭标准输出、输入、出错
+- 初始化 harbor skynet_harbor_init #TODO
+- 初始化 handle skynet_handle_init(config->harbor); #TODO
+- 初始化 MQ skynet_mq_init();
+- 初始化 module skynet_module_init(config->module_path); #TODO
+- 初始化 timer skynet_timer_init(); #TODO
+- 初始化 Network skynet_socket_init();
+- 初始化 profile skynet_profile_enable(config->profile); #TODO
+- 初始化 Log 对象和 bootstrap相关信息 
+- 开始运行
+	- 创建 Monitor 对象，用来给外部对整个系统的对 线程描述信息数组，锁， sleep， quit 等信息的跟踪
+	- 创建3个线程 和 pthread_mutex pthread_cond 每个线程包含的信息：版本 Mornitor ，check_version, source, destination，每个线程的这些信息放在 Mornitor 里面的线程描述信息组里。这三个线程分别是 Mornitor， Timer， socket 线程
+	- 创建 12个线程，都是 thread_worker, 每个线程开始自己的工作
+	- 每个 worker 线程开始自己的无限循环，从 MQ 中拿数据来做事情。这个动作都是用 mutex 锁定的保证线程安全。
+
+这就是整个启动逻辑的全部过程，后期每个 worker 如何工作都是通过 MQ 的指令来做的。基本框架就出来了
+
 
 ## LPeg
 这是一个用于做正则表达示实现模式匹配和解析器，比 Lua 中的正则表达式处理，提供更灵活的能力
@@ -51,10 +75,21 @@ print(identifier:match("123var")) -- 输出 nil
 
 ```
 
+## config 部分
+这个系统采用 Lua 文件作为整个系统的配置
 
 ## 环境变量部分
 
 在 skynet 中环境变量定义的是在 skynet_env.c/h 中定义的，这部分简单就是利用一个 lua_State 放入一些 global 的变量，这些变量可以通过spinlock来限制线程同步获取和设置。本身才去了线程安全。
+在环境变量的处理中有 
+```C
+void skynet_setenv(const char * key, const char * val); 
+```
+这其实也就是往所对应的 lua_State 里面放入一些变量存储而已，没有特别的。
+```C
+const char * skynet_getenv(const char * key);
+```
+就是读取存放在 lua_State 里面的变量返回出来
 
 ```C
 struct skynet_env {
@@ -234,7 +269,7 @@ socket_server.c : static int ctrl_cmd(struct socket_server *ss, struct socket_me
 网络模块的基本逻辑，这条线中有很多其他的逻辑，都基本上是附加的，有什么相关的逻辑就可以按照这条线去发展。
 
 ## SpinLock 自旋锁
-这个项目中多线程对一个资源的加锁通常都使用的是 spinLock，我好像没有读到过有其他加锁的逻辑。
+这个项目中多线程对一个资源的加锁通常都使用的是 spinLock，在代码里面除了 spinLock 之外还有 mutex，但是好像没有看到有semaphore的加锁。
 所有自旋锁的逻辑都放在 spinlock.h/c 中
 
 这里 spinLock, mutex 和 Semaphore 有很大的区别，列一下：
@@ -275,13 +310,13 @@ static struct global_queue *Q = NULL;
 整个 Queue 的内部采用循环队列来管理 all messages，当一个 queue 的循环队列满了，会自动expand_queue 这个队列，他的逻辑是 expand 当时队列的长度，就是将队列变成 2 倍那么长。
 MQ 被使用的地方：
 ```
-1. 
+1. 多个线程之间数据交换的基本通道，为了保证线程安全，多个线程之间的MQ
 2.
 3.
 ```
 
 ## Module 
-
+TODO:
 
 ## Timer
 TODO:
@@ -293,10 +328,23 @@ TODO:
 TODO:
 
 ## Harbor
-TODO:
+
+```C 参考
+static unsigned int HARBOR = ~0; //按位取反 结果是 0xFFFFFFFF 这是获取最大 unsigned int 的最好办法
+
+```
 
 ## Handler
 TODO:
 
 ## Daemon && Single
 TODO:
+
+
+
+## 读代码的总结
+
+读代码不能一字一句的去读，一段一段的读，明白他这段是什么意思，然后读下一段，不能跳进去精细的去读。要保持脑子里的那个框架去读。框架整理清楚了以后，每个模块再去细读，这样才能弄清楚他的思想和做法。
+
+以前读大话 3 服务器段引擎我完全是一句一句去读的，因为他简单所以能读懂。这种复杂的项目一句一句去读，马上脑子就死掉了读不下去了，
+
