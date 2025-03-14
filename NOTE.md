@@ -13,6 +13,7 @@ jemalloc 主要用了内存池来管理内存而不是原有的 malloc管理内�
 在 makefile 中，的 include platform.mk 主要处理平台相关的宏定义和 gcc 的基础命令行
 其中优先编译 3rd，
 
+
 ## .PHONY
 是为了防止文件名与 target 冲突的，如果有一个文件叫做 clean.cpp
 ```makefile
@@ -27,7 +28,6 @@ jemalloc 主要用了内存池来管理内存而不是原有的 malloc管理内�
 ```
 这样gcc 会认为只去编译 clean.cpp 而不会去找 clean 的 target 执行.
 
-----
 
 ## LPeg
 这是一个用于做正则表达示实现模式匹配和解析器，比 Lua 中的正则表达式处理，提供更灵活的能力
@@ -51,7 +51,6 @@ print(identifier:match("123var")) -- 输出 nil
 
 ```
 
----
 
 ## 环境变量部分
 
@@ -74,7 +73,6 @@ atomic_exchange_explicit(&lock->lock);
 atomic_compare_exchange_weak(&lock->lock);
 ```
 
----
 
 ## lualib-src/sproto 协议封装
 这目录下面的代码是一个独立的项目，他实现的protocol buf, 从他的描述说比 google protocol buffer速度要快，仔细看了代码才知道很多地方抠到了字节。
@@ -95,9 +93,48 @@ int sproto_unpack(const void * src, int srcsz, void * buffer, int bufsz);
 ```
 这是对于每一个 bit 都要处理到位的地方，有很多地方可以学习。这部分逻辑并不复杂，但是应用手法比较苛刻，所以对空间和时间的把握就很好。
 
----
+```C
+static inline int
+fill_size(uint8_t * data, int sz) {
+	data[0] = sz & 0xff;
+	data[1] = (sz >> 8) & 0xff;
+	data[2] = (sz >> 16) & 0xff;
+	data[3] = (sz >> 24) & 0xff;
+	return sz + SIZEOF_LENGTH;
+}
 
-## Network
+static int
+encode_integer(uint32_t v, uint8_t * data, int size) {
+	if (size < SIZEOF_LENGTH + sizeof(v))
+		return -1;
+	data[4] = v & 0xff;
+	data[5] = (v >> 8) & 0xff;
+	data[6] = (v >> 16) & 0xff;
+	data[7] = (v >> 24) & 0xff;
+	return fill_size(data, sizeof(v));
+}
+
+static int encode_uint64(uint64_t v, uint8_t * data, int size) {
+	if (size < SIZEOF_LENGTH + sizeof(v))
+		return -1;
+	data[4] = v & 0xff;
+	data[5] = (v >> 8) & 0xff;
+	data[6] = (v >> 16) & 0xff;
+	data[7] = (v >> 24) & 0xff;
+	data[8] = (v >> 32) & 0xff;
+	data[9] = (v >> 40) & 0xff;
+	data[10] = (v >> 48) & 0xff;
+	data[11] = (v >> 56) & 0xff;
+	return fill_size(data, sizeof(v));
+}
+```
+
+这 encoder 的逻辑很神奇，把一个更大的空间的类型按照不同的 bit 给数据存放到比他更小空间的数组中。这样其实是可以保证一个我们看似会丢数据的逻辑，数据保持了完整性。
+这里记录一下以后可能有很大的帮助。
+
+
+
+## Network 线程
  基础的TCP/IP 接口的实现，支持 TCP UDP 的协议。对于 MacosX 和 FreeBSD 系统在编译的时候通过宏定义导向逻辑 KEvent 来实现(socket_server.c, socket_pool.h, socket_kqueue.h)，Linux 下面导向 epoll (socket_epoll.h)实现. 核心函数 send_request
 
  ```
@@ -196,11 +233,23 @@ socket_server.c : static int ctrl_cmd(struct socket_server *ss, struct socket_me
 ```
 网络模块的基本逻辑，这条线中有很多其他的逻辑，都基本上是附加的，有什么相关的逻辑就可以按照这条线去发展。
 
----
-## MQ
+## SpinLock 自旋锁
+这个项目中多线程对一个资源的加锁通常都使用的是 spinLock，我好像没有读到过有其他加锁的逻辑。
+
+这里 spinLock, mutex 和 Semaphore 有很大的区别，列一下：
+- 工作方法：
+	* SpinLock 处于忙等待的情况，就是如果尝试被锁的资源已经被锁定，就会一直尝试检查，直到被自己锁定位置
+	* Mutex 线程尝试获取锁，如果已经被其他线程锁定，则线程会进入休眠（阻塞），当这个资源的锁被释放后，操作系统会唤醒被阻塞的锁来执行
+	* Semaphore 通过信号量维护一个计数器，来控制多个线程多资源的访问，可以让多个线程同时访问一个被锁定的临界区，通常分为两种：binary Semaphore (BS) 和 counting Semaphore(CS). BS类似于Mutex 只有 0， 1， 允许访问和不允许。CS 计数器大于 1 的时候表示可以有多个线程访问，超过计数的 Count 之后，CS 计数器就为 0，这样就不能被访问了。这个复杂度比较高，适用于生产者消费者的模型。
+- 优缺点：
+	* SpinLock 在响应速度上很快，适合快速的场景，比如就是系统逻辑，没有 IO，网络等参与的逻辑，但是一直会占用 CPU 资源做无限循环，不适合对长时间的操作加锁
+	* Mutex 节约CPU，适合在被锁的逻辑中有比较长时间的操作，比如 IO，网络，进程交互，大内存空间的扫描。因为线程要挂起，就会出现线程上下文切换的的问题，这就让这个操作效率比较低了
+	* Semaphore 灵活性很高，可以针对多个线程访问资源的限制，不仅仅是 0 和 1 的关系。但是复杂性较高，可能出现死锁，在访问连接池，线程池，这类操作的时候比较适用
+
+## MQ 线程
 TODO:
 
-## Module
+## Module 
 TODO:
 
 ## Timer
