@@ -8,13 +8,13 @@
 - 以代码中的字符串初始化配置文件Lua 虚拟机中，关闭这个 Lua 虚拟机（有点绕是吧，但是有点想法，是为了不被干扰，保持配置文件模块中的虚拟机干净整齐）
 - 调用skynet_star(struct skynet_config * config) 开始启动
 - 先绑定 SIGNEL 的处理函数， 然后初始化，如果 config 有定义 daemon，就将进程设置为 daemon，这里判断如果是 MacOSX 就不做这个事情，因为 MacOSX 10.5 已经弃用了 Daemon，就直接写 pid 文件，关闭标准输出、输入、出错
-- 初始化 harbor skynet_harbor_init #TODO
-- 初始化 handle skynet_handle_init(config->harbor); #TODO
+- 初始化 harbor skynet_harbor_init 
+- 初始化 handle skynet_handle_init(config->harbor);
 - 初始化 MQ skynet_mq_init();
-- 初始化 module skynet_module_init(config->module_path); #TODO
-- 初始化 timer skynet_timer_init(); #TODO
+- 初始化 module skynet_module_init(config->module_path); 
+- 初始化 timer skynet_timer_init(); 
 - 初始化 Network skynet_socket_init();
-- 初始化 profile skynet_profile_enable(config->profile); #TODO
+- 初始化 profile skynet_profile_enable(config->profile); 
 - 初始化 Log 对象和 bootstrap相关信息 
 - 开始运行
 	- 创建 Monitor 对象，用来给外部对整个系统的对 线程描述信息数组，锁， sleep， quit 等信息的跟踪。（这里是主线程）
