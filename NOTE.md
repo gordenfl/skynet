@@ -394,23 +394,99 @@ struct skynet_module * mod;
 
 Context 除了支持传递 Module 之外还可以支持传递 common 的数据，
 
+```C
+static const char * cmd_timeout(struct skynet_context * context, const char * param);
+static const char * cmd_signal(struct skynet_context * context, const char * param);
+static const char * cmd_logoff(struct skynet_context * context, const char * param);
+static const char * cmd_logon(struct skynet_context * context, const char * param);
+static const char * cmd_stat(struct skynet_context * context, const char * param);
+static const char * cmd_monitor(struct skynet_context * context, const char * param);
+static const char * cmd_abort(struct skynet_context * context, const char * param); 
+static const char * cmd_starttime(struct skynet_context * context, const char * param); 
+static const char * cmd_setenv(struct skynet_context * context, const char * param);
+static const char * cmd_getenv(struct skynet_context * context, const char * param);
+static const char * cmd_launch(struct skynet_context * context, const char * param);
+static const char * cmd_kill(struct skynet_context * context, const char * param);
+static const char * cmd_exit(struct skynet_context * context, const char * param);
+static const char * cmd_name(struct skynet_context * context, const char * param);
+static const char * cmd_query(struct skynet_context * context, const char * param); 
+static const char * cmd_reg(struct skynet_context * context, const char * param);
+
+static struct command_func cmd_funcs[] = {
+	{ "TIMEOUT", cmd_timeout },
+	{ "REG", cmd_reg },
+	{ "QUERY", cmd_query },
+	{ "NAME", cmd_name },
+	{ "EXIT", cmd_exit },
+	{ "KILL", cmd_kill },
+	{ "LAUNCH", cmd_launch },
+	{ "GETENV", cmd_getenv },
+	{ "SETENV", cmd_setenv },
+	{ "STARTTIME", cmd_starttime },
+	{ "ABORT", cmd_abort },
+	{ "MONITOR", cmd_monitor },
+	{ "STAT", cmd_stat },
+	{ "LOGON", cmd_logon },
+	{ "LOGOFF", cmd_logoff },
+	{ "SIGNAL", cmd_signal },
+	{ NULL, NULL },
+};
+```
+这里一系列的函数定时是内部模块之间的通信所用的，主要以下面的 cmd_funcs 数组形式与字符串对应，相当于一个命令表，这样可以让进程见通行更加方便。在这个基础上外部只要向函数skynet_command 发送 Context 就能够让服务器在进程或者线程中间实现调用，具体的参数都放在 Context 里面，这里面也有上面所将的 Handler 和 Module 信息。会让系统更加统一的进行交互。
+
 ## Timer
-TODO:
+skynet_timer.c/h
+这里管理 Timer 逻辑比较复杂但是并不是很难懂，首先结构体定义：
+```C
+struct timer {
+	struct link_list near[TIME_NEAR]; //256 个 link_list 每个 link_list 有多少个元素自己去挂上就可以了
+	struct link_list t[4][TIME_LEVEL]; //4*64 个 link_list 也是 256 个,但是分成 4 份
+	struct spinlock lock;
+	uint32_t time;
+	uint32_t starttime;
+	uint64_t current; //代表现在有多少个 timer
+	uint64_t current_point;
+};
+```
+这里定义了timer 的基本属性，包括 starttime current 还有一个 sprinlock 用来处理线程锁的时候对时间的修改。
 
-## Profile
-TODO:
-
-## bootstrap
-TODO:
-
-## Harbor
-TODO:
+首先在 start 里面会起一个 timer 相关的线程，这个线程也是死循环，每次 skynet_updatetime, skynet_socket_updatetime.
+```
+skynet_updatetime:主要是更新普通的定时器，每次 check 所有定时器对象（link_list中的）时间到了或者大于了就去执行，否则就不执行并且更新其time
+skynet_socket_updatetime: 每次只是将 socket 部分的时钟更新而已不存在逻辑调用
+```
 
 ## Service 模块
-TODO:
+这个模块放在与 skynet-src平级的目录 service-src 下。怎么理解 service 的含义，这其实就是逻辑上层的实现，但是又不能放在 Lua 中实现，因为对性能要求比较高，所以就用 C 来实现了。这部分的内容主要包括：
+```
+databuffer.h //主要是通信数据的管理，databuffer 的定义（环形链表节点），message（单链表节点） 的定义，messagepool的实现，支持多个messagepool 行程一个 messagepool_list(单链表)，在并发条件下如何处理数据的 push， pop， read，free， 详细的要说的话，数据分为头部和 body
 
-## Mornitor 线程
-TODO:
+hashid.h //使用单链表来解决 hash 冲突，实现了一个 hash 表（重复造轮子了）
+service_gate.c //实现了一个网关服务，定义的 struct connection 就是一个一个的连接对象，针对这些连接端详的连接处理，和 message_dispatch,底层都是调用skynet_socket 部分的逻辑来实现的。
+service_harbor.c //这里是定义了远程消息发送的接口，他叫做 Harbor 港口的意思，就是说一个 SkyNet 节点与另外一个节点之间的联系是依靠 Harbor 进行的。从他的介绍上来看他并不赞成使用多服结构，多着多进程结构，他希望的是在他的 SkyNet 进程中用不同的线程去完成所有的事情，但是他也提供了一个能够向外扩展的多进程或者跨服的接口，这就是。
+service_logger.c //一个提供了写入 log 信息的函数集
+service_snlua.c //这个模块就是实现了初始化 Lua 环境，并且加载执行 Lua 脚本，协程调度和内存管理的模块，包括实现了协程调度，信号处理，属于 Lua 的标准库扩展，性能分析，等等。
+```
+如果要详细分析这些，需要很多时间，现在只拿到的是一个概括而已。
+
+## Monitor 线程
+这个进程的事情很简单，首先管理的事情就 version check_version， source， destination
+```C
+struct skynet_monitor {
+	ATOM_INT version;
+	int check_version;
+	uint32_t source;
+	uint32_t destination;
+};
+```
+这个模块的初始化函数skynet_monitor_new，是在skynet_start start 函数中， 有多少个 thread 就会创建多少个 Monitor 对象，然后放在数组里。
+```C
+struct monitor *m = skynet_malloc(sizeof(*m));
+for (i=0;i<thread;i++) {
+		m->m[i] = skynet_monitor_new();//create an instance of monitor 
+}
+```
+然后创建一个 monitor 线程, 线程所做的事情就是一个死循环，不听的监控m中的每一个元素的状态，逻辑也比较简单，检测version 和 check_version 是否相等，不等就设置相等，如果 destination 有问题就回收内存，并且报错，让他退出
 
 
 ```C 参考
@@ -418,12 +494,9 @@ static unsigned int HARBOR = ~0; //按位取反 结果是 0xFFFFFFFF 这是获�
 ```
 
 
-## Daemon && Single
-TODO:
-
 
 ## Lua 代码部分 (./lualib )
-TODO:
+请查看这个文件：[NOTE_LUA.md](./NOTE_LUA.md)
 
 ## LPeg
 这是一个用于做正则表达示实现模式匹配和解析器，比 Lua 中的正则表达式处理，提供更灵活的能力
