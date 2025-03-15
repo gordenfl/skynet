@@ -357,7 +357,7 @@ static struct handle_storage *H = NULL;
 Handler 模块初始化的逻辑大概是给他的 H 创建内存，并且 H 中的 slot 也创建内存，
 
 在这个模块里面他提供了 register, retire, retire_all, grab, find_name 等函数让别人去操作 handle 对象
-具体 Handler 和 Module 之间的区别后面看懂了再在这里写，从现在读到的深度似乎发现了 Handler 比 Module更加 common 对的类。这可能是除了 Module 之外还有其他的东西需要通过 Handler 来操作，用  将 Context 包装一层 Module 放入 Hnadler 里面。（总之要确认才知道） TODO：
+具体 Handler 和 Module 之间的区别后面看懂了再在这里写，从现在读到的深度似乎发现了 Handler 比 Module更加 common 对的类。这可能是除了 Module 之外还有其他的东西需要通过 Handler 来操作，用  将 Context 包装一层 Module 放入 Hnadler 里面。（总之要确认才知道）
 
 另外 handler 是也可以用名字检索
 
