@@ -32,18 +32,18 @@
         |   └── tlshelper.lua #TLS 对应的处理，就是 传统的 SSL 的处理，证书验证，等等加密通道
         |   └── url.lua # URL相关的处理，比如 decode， encode，字节处理等等
         |   └── websocket.lua # Websocket 的处理，在 HTTP 协议上层建立类似 TCP 的互相通信的渠道
-        ├── skynet/
+        ├── skynet/ # 这里是 skynet 的核心区域
         |   └── datasheet\
         |   |   └── builder.lua 
         |   |   └── dump.lua
         |   |   └── init.lua
-        |   └── db\
-        |   |   └── redis\
+        |   └── db\ #对于 DB 的支持
+        |   |   └── redis\ # redis的支持
         |   |   |   └── cluster.lua
-        |   |   |   └── crc16.lua
-        |   |   └── mongo.lua
-        |   |   └── mysql.lua
-        |   |   └── redis.lua
+        |   |   |   └── crc16.lua   #crc16 算法，用于cluster中的运算
+        |   |   └── mongo.lua #mongodb的支持
+        |   |   └── mysql.lua # mysql db的支持
+        |   |   └── redis.lua # redis 支持的对外接口
         |   └── sharedata\
         |   |   └── corelib.lua
         |   └── cluster.lua
